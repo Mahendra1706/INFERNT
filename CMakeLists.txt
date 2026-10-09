@@ -13,9 +13,18 @@ add_executable(infernt
     src/main.cpp
     src/tensor.cpp
     src/config.cpp
+    src/kv_cache.cpp
     src/cuda_init.cu
+    gemm/cublas_wrapper.cu
+    cuda/rmsnorm.cu
+    cuda/residual.cu
+    cuda/rope.cu
+    cuda/softmax.cu
+    cuda/kv_cache.cu
+    cuda/attention.cu
 )
 
 target_link_libraries(infernt
     cudart
+    cublas
 )
