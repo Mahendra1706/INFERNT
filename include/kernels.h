@@ -37,3 +37,6 @@ void launch_attention_values(float* output, const float* scores, const float* v_
                              int num_q_heads, int num_kv_heads, int head_dim,
                              int seq_len, int max_seq_len,
                              cudaStream_t stream = nullptr);
+
+void launch_silu_mul(float* out, const float* gate, const float* up,
+                     int num_elements, cudaStream_t stream = nullptr);

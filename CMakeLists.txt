@@ -22,6 +22,9 @@ add_executable(infernt
     cuda/softmax.cu
     cuda/kv_cache.cu
     cuda/attention.cu
+    cuda/activation.cu
+    architectures/llama/llama_model.cpp
+    architectures/llama/llama_layer.cpp
 )
 
 target_link_libraries(infernt

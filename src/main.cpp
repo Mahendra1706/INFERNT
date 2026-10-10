@@ -484,10 +484,105 @@ bool test_attention_gqa() {
     return true;
 }
 
+bool test_mlp_activation() {
+    printf("\n--- Test: SiLU MLP Activation ---\n");
+    int n = 4;
+    auto gate_cpu = Tensor::zeros({n}, DType::FP32, Device::CPU);
+    auto up_cpu = Tensor::zeros({n}, DType::FP32, Device::CPU);
+    float* g = gate_cpu.data_as_float();
+    float* u = up_cpu.data_as_float();
+    
+    for(int i = 0; i < n; i++) {
+        g[i] = static_cast<float>(i - 1);
+        u[i] = 2.0f;
+    }
+
+    auto gate_gpu = gate_cpu.to(Device::CUDA);
+    auto up_gpu = up_cpu.to(Device::CUDA);
+    auto out_gpu = Tensor::zeros({n}, DType::FP32, Device::CUDA);
+
+    launch_silu_mul(out_gpu.data_as_float(), gate_gpu.data_as_float(), up_gpu.data_as_float(), n);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    auto out_cpu = out_gpu.to(Device::CPU);
+    const float* o = out_cpu.data_as_float();
+
+    for(int i = 0; i < n; i++) {
+        float expected = g[i] / (1.0f + std::exp(-g[i])) * u[i];
+        if (std::fabs(o[i] - expected) > 1e-4f) {
+            printf("  FAILED at %d: expected=%.6f got=%.6f\n", i, expected, o[i]);
+            return false;
+        }
+    }
+    printf("  PASSED\n");
+    return true;
+}
+
+#include "architecture.h"
+
+bool test_llama_architecture() {
+    printf("\n--- Test: LlamaArchitecture Forward (Phases 10-12) ---\n");
+    ModelConfig config;
+    config.architecture = "LlamaForCausalLM";
+    config.vocab_size = 100;
+    config.hidden_size = 32;
+    config.num_layers = 2; // Test multi-layer (Phase 11)
+    config.num_attention_heads = 4;
+    config.num_key_value_heads = 4;
+    config.intermediate_size = 64;
+    config.max_seq_len = 16;
+    config.rms_norm_eps = 1e-5f;
+    config.rope_theta = 10000.0f;
+    config.derive_computed_fields();
+
+    int q_size = config.num_attention_heads * config.head_dim;
+    int kv_size = config.num_key_value_heads * config.head_dim;
+
+    ModelWeights weights;
+    weights.final_norm = Tensor::zeros({config.hidden_size}, DType::FP32, Device::CUDA);
+    weights.lm_head = Tensor::zeros({config.vocab_size, config.hidden_size}, DType::FP32, Device::CUDA);
+    
+    for (int i = 0; i < config.num_layers; i++) {
+        TransformerLayerWeights lw;
+        lw.attn_norm = Tensor::zeros({config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.q_proj = Tensor::zeros({q_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.k_proj = Tensor::zeros({kv_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.v_proj = Tensor::zeros({kv_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.o_proj = Tensor::zeros({config.hidden_size, q_size}, DType::FP32, Device::CUDA);
+        lw.ffn_norm = Tensor::zeros({config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.gate_proj = Tensor::zeros({config.intermediate_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.up_proj = Tensor::zeros({config.intermediate_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.down_proj = Tensor::zeros({config.hidden_size, config.intermediate_size}, DType::FP32, Device::CUDA);
+        weights.layers.push_back(std::move(lw));
+    }
+
+    CublasWrapper cublas;
+    LlamaArchitecture llama(cublas);
+    llama.allocate_activations(config, 1);
+
+    KVCache kv_cache;
+    kv_cache.allocate(config);
+    kv_cache.reset();
+
+    auto input_emb = Tensor::zeros({1, config.hidden_size}, DType::FP32, Device::CUDA);
+    auto logits = Tensor::zeros({1, config.vocab_size}, DType::FP32, Device::CUDA);
+
+    try {
+        llama.forward(input_emb, weights, kv_cache, 0, logits);
+        CUDA_CHECK(cudaDeviceSynchronize());
+    } catch (const std::exception& e) {
+        printf("  FAILED: Exception during forward pass: %s\n", e.what());
+        return false;
+    }
+
+    printf("  PASSED\n");
+    return true;
+}
+
 int main() {
     printf("========================================\n");
     printf("  INFERNT — CUDA LLM Inference Engine\n");
-    printf("  Phases 1-8 Validation\n");
+    printf("  Phases 1-12 Validation\n");
     printf("========================================\n\n");
 
     cuda_init(0);
@@ -535,6 +630,10 @@ int main() {
 
     printf("\n=== Phase 8: Attention + GQA ===\n");
     run_test("Attention GQA", test_attention_gqa);
+
+    printf("\n=== Phases 9-12: MLP & Architecture ===\n");
+    run_test("SiLU MLP Activation", test_mlp_activation);
+    run_test("Llama Forward Pass", test_llama_architecture);
 
     printf("\n========================================\n");
     printf("  Results: %d passed, %d failed\n", passed, failed);
