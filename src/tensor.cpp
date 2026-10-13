@@ -118,6 +118,12 @@ Tensor Tensor::to(Device target_device) const {
     return result;
 }
 
+Tensor Tensor::clone() const {
+    Tensor result(shape_, dtype_, device_);
+    result.copy_from(*this);
+    return result;
+}
+
 void Tensor::copy_from(const Tensor& src) {
     if (num_elements_ != src.num_elements_ || dtype_ != src.dtype_) {
         throw std::runtime_error("Tensor shape/dtype mismatch in copy_from");

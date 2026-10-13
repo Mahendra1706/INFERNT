@@ -39,6 +39,7 @@ public:
     static Tensor empty(const std::vector<int>& shape, DType dtype, Device device);
 
     Tensor to(Device target_device) const;
+    Tensor clone() const;
     void copy_from(const Tensor& src);
 
     void* data_ptr();

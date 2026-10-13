@@ -11,9 +11,12 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_executable(infernt
     src/main.cpp
+    src/engine.cpp
     src/tensor.cpp
     src/config.cpp
     src/kv_cache.cpp
+    tokenizer/tokenizer.cpp
+    loader/checkpoint_loader.cpp
     src/cuda_init.cu
     gemm/cublas_wrapper.cu
     cuda/rmsnorm.cu
@@ -23,6 +26,8 @@ add_executable(infernt
     cuda/kv_cache.cu
     cuda/attention.cu
     cuda/activation.cu
+    cuda/embedding.cu
+    cuda/sampling.cu
     architectures/llama/llama_model.cpp
     architectures/llama/llama_layer.cpp
 )

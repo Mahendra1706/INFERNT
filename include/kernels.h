@@ -40,3 +40,11 @@ void launch_attention_values(float* output, const float* scores, const float* v_
 
 void launch_silu_mul(float* out, const float* gate, const float* up,
                      int num_elements, cudaStream_t stream = nullptr);
+
+void launch_embedding_lookup(float* output, const float* table,
+                            int token_id, int hidden_size,
+                            cudaStream_t stream = nullptr);
+
+void launch_argmax(int* out_token, const float* logits,
+                   int vocab_size, cudaStream_t stream = nullptr);
+

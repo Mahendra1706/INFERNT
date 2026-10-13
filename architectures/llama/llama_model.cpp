@@ -40,7 +40,6 @@ void LlamaArchitecture::forward(const Tensor& input_embeddings,
 
     for (int i = 0; i < config_.num_layers; i++) {
         layer_forward(hidden_states_, weights.layers[i], kv_cache, position, i, next_hidden_states_);
-        // Swap hidden_states and next_hidden_states (just copy for simplicity or swap data pointers)
         hidden_states_.copy_from(next_hidden_states_);
     }
 

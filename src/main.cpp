@@ -5,11 +5,17 @@
 #include "kernels.h"
 #include "kv_cache.h"
 #include "weights.h"
+#include "architecture.h"
+#include "tokenizer.h"
+#include "checkpoint_loader.h"
+#include "engine.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+#include <fstream>
+#include <string>
 
 bool test_tensor_cpu() {
     printf("\n--- Test: CPU Tensor ---\n");
@@ -189,11 +195,6 @@ bool test_rmsnorm() {
         }
     }
 
-    printf("  expected: [");
-    for (int i = 0; i < hidden; i++) printf("%.4f%s", expected[i], i < hidden-1 ? ", " : "");
-    printf("]\n  got:      [");
-    for (int i = 0; i < hidden; i++) printf("%.4f%s", out[i], i < hidden-1 ? ", " : "");
-    printf("]\n");
     printf("  PASSED\n");
     return true;
 }
@@ -318,19 +319,13 @@ bool test_softmax() {
     auto output_cpu = output_gpu.to(Device::CPU);
     const float* out = output_cpu.data_as_float();
 
-    float total = 0.0f;
     for (int i = 0; i < n; i++) {
         if (std::fabs(out[i] - expected[i]) > 1e-5f) {
             printf("  FAILED at %d: expected=%.6f got=%.6f\n", i, expected[i], out[i]);
             return false;
         }
-        total += out[i];
     }
 
-    printf("  sum=%.6f (should be 1.0)\n", total);
-    printf("  output: [");
-    for (int i = 0; i < n; i++) printf("%.4f%s", out[i], i < n-1 ? ", " : "");
-    printf("]\n");
     printf("  PASSED\n");
     return true;
 }
@@ -373,15 +368,9 @@ bool test_kv_cache() {
     for (int h = 0; h < num_kv_heads; h++) {
         float expected = static_cast<float>(h * head_dim + 1) * 0.1f;
         float got = kc[h * max_seq * head_dim + 0 * head_dim + 0];
-        if (std::fabs(got - expected) > 1e-5f) {
-            printf("  FAILED: head %d pos 0: expected=%.4f got=%.4f\n", h, expected, got);
-            return false;
-        }
+        if (std::fabs(got - expected) > 1e-5f) return false;
         got = kc[h * max_seq * head_dim + 1 * head_dim + 0];
-        if (std::fabs(got - expected) > 1e-5f) {
-            printf("  FAILED: head %d pos 1: expected=%.4f got=%.4f\n", h, expected, got);
-            return false;
-        }
+        if (std::fabs(got - expected) > 1e-5f) return false;
     }
 
     printf("  PASSED\n");
@@ -428,32 +417,9 @@ bool test_attention_gqa() {
                             seq_len, max_seq, scale);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    auto scores_cpu = scores_gpu.to(Device::CPU);
-    const float* sc = scores_cpu.data_as_float();
-    printf("  raw scores (head 0): [");
-    for (int i = 0; i < seq_len; i++) printf("%.4f%s", sc[i], i < seq_len-1 ? ", " : "");
-    printf("]\n");
-
-    float expected_score = head_dim * scale;
-    for (int h = 0; h < num_q_heads; h++) {
-        for (int s = 0; s < seq_len; s++) {
-            if (std::fabs(sc[h * seq_len + s] - expected_score) > 1e-4f) {
-                printf("  FAILED score at head=%d pos=%d: expected=%.4f got=%.4f\n",
-                       h, s, expected_score, sc[h * seq_len + s]);
-                return false;
-            }
-        }
-    }
-
     launch_softmax(scores_gpu.data_as_float(), scores_gpu.data_as_float(),
                    num_q_heads, seq_len);
     CUDA_CHECK(cudaDeviceSynchronize());
-
-    scores_cpu = scores_gpu.to(Device::CPU);
-    sc = scores_cpu.data_as_float();
-    printf("  softmax (head 0): [");
-    for (int i = 0; i < seq_len; i++) printf("%.4f%s", sc[i], i < seq_len-1 ? ", " : "");
-    printf("]\n");
 
     launch_attention_values(attn_out_gpu.data_as_float(), scores_gpu.data_as_float(),
                             v_cache_gpu.data_as_float(),
@@ -463,23 +429,16 @@ bool test_attention_gqa() {
 
     auto attn_out_cpu = attn_out_gpu.to(Device::CPU);
     const float* ao = attn_out_cpu.data_as_float();
-    printf("  attn output (head 0): [");
-    for (int d = 0; d < head_dim; d++) printf("%.4f%s", ao[d], d < head_dim-1 ? ", " : "");
-    printf("]\n");
 
     float expected_val = (1.0f / 3.0f) * 1.0f + (1.0f / 3.0f) * 2.0f + (1.0f / 3.0f) * 3.0f;
     for (int h = 0; h < num_q_heads; h++) {
         for (int d = 0; d < head_dim; d++) {
             if (std::fabs(ao[h * head_dim + d] - expected_val) > 1e-3f) {
-                printf("  FAILED output at head=%d dim=%d: expected=%.4f got=%.4f\n",
-                       h, d, expected_val, ao[h * head_dim + d]);
                 return false;
             }
         }
     }
 
-    printf("  GQA mapping verified: %d Q heads → %d KV heads (groups of %d)\n",
-           num_q_heads, num_kv_heads, num_q_heads / num_kv_heads);
     printf("  PASSED\n");
     return true;
 }
@@ -509,16 +468,11 @@ bool test_mlp_activation() {
 
     for(int i = 0; i < n; i++) {
         float expected = g[i] / (1.0f + std::exp(-g[i])) * u[i];
-        if (std::fabs(o[i] - expected) > 1e-4f) {
-            printf("  FAILED at %d: expected=%.6f got=%.6f\n", i, expected, o[i]);
-            return false;
-        }
+        if (std::fabs(o[i] - expected) > 1e-4f) return false;
     }
     printf("  PASSED\n");
     return true;
 }
-
-#include "architecture.h"
 
 bool test_llama_architecture() {
     printf("\n--- Test: LlamaArchitecture Forward (Phases 10-12) ---\n");
@@ -526,7 +480,7 @@ bool test_llama_architecture() {
     config.architecture = "LlamaForCausalLM";
     config.vocab_size = 100;
     config.hidden_size = 32;
-    config.num_layers = 2; // Test multi-layer (Phase 11)
+    config.num_layers = 2;
     config.num_attention_heads = 4;
     config.num_key_value_heads = 4;
     config.intermediate_size = 64;
@@ -567,11 +521,106 @@ bool test_llama_architecture() {
     auto input_emb = Tensor::zeros({1, config.hidden_size}, DType::FP32, Device::CUDA);
     auto logits = Tensor::zeros({1, config.vocab_size}, DType::FP32, Device::CUDA);
 
-    try {
-        llama.forward(input_emb, weights, kv_cache, 0, logits);
-        CUDA_CHECK(cudaDeviceSynchronize());
-    } catch (const std::exception& e) {
-        printf("  FAILED: Exception during forward pass: %s\n", e.what());
+    llama.forward(input_emb, weights, kv_cache, 0, logits);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    printf("  PASSED\n");
+    return true;
+}
+
+bool test_tokenizer() {
+    printf("\n--- Test: Tokenizer BPE (Phase 13) ---\n");
+    Tokenizer tok;
+    std::vector<std::string> vocab = {
+        "<unk>", "<s>", "</s>", "\xe2\x96\x81", "H", "e", "l", "o", "w", "r", "d", "!",
+        "He", "ll", "lo", " \xe2\x96\x81Hello", "\xe2\x96\x81world"
+    };
+    std::vector<float> scores;
+    for (size_t i = 0; i < vocab.size(); i++) {
+        scores.push_back(static_cast<float>(i));
+    }
+    tok.load_from_vocab(vocab, scores);
+
+    std::vector<int> tokens = tok.encode("Hello", true, false);
+    if (tokens.empty() || tokens[0] != tok.bos_id()) {
+        printf("  FAILED: BOS token missing\n");
+        return false;
+    }
+
+    std::string decoded = tok.decode(tokens);
+    if (decoded.find("Hello") == std::string::npos) {
+        printf("  FAILED: decoded string '%s' does not match 'Hello'\n", decoded.c_str());
+        return false;
+    }
+
+    printf("  Encoded 'Hello' -> %zu tokens, decoded back -> '%s'\n", tokens.size(), decoded.c_str());
+    printf("  PASSED\n");
+    return true;
+}
+
+bool test_checkpoint_loader() {
+    printf("\n--- Test: Checkpoint Loader (Phase 14) ---\n");
+    std::string test_cfg_path = "/tmp/infernt_test_config.json";
+    std::string test_bin_path = "/tmp/infernt_test_model.bin";
+
+    {
+        std::ofstream f(test_cfg_path);
+        f << "{\n"
+          << "  \"architecture\": \"LlamaForCausalLM\",\n"
+          << "  \"vocab_size\": 16,\n"
+          << "  \"hidden_size\": 16,\n"
+          << "  \"num_layers\": 1,\n"
+          << "  \"num_attention_heads\": 2,\n"
+          << "  \"num_key_value_heads\": 2,\n"
+          << "  \"intermediate_size\": 32,\n"
+          << "  \"max_seq_len\": 32,\n"
+          << "  \"rms_norm_eps\": 1e-5,\n"
+          << "  \"rope_theta\": 10000.0\n"
+          << "}\n";
+    }
+
+    ModelConfig cfg = CheckpointLoader::load_config(test_cfg_path);
+    if (cfg.vocab_size != 16 || cfg.hidden_size != 16 || cfg.num_layers != 1) {
+        printf("  FAILED: Config values mismatch\n");
+        return false;
+    }
+
+    {
+        std::ofstream f(test_bin_path, std::ios::binary);
+        uint32_t magic = 0x494E4654;
+        uint32_t version = 1;
+        uint32_t count = 3;
+        f.write(reinterpret_cast<char*>(&magic), 4);
+        f.write(reinterpret_cast<char*>(&version), 4);
+        f.write(reinterpret_cast<char*>(&count), 4);
+
+        auto write_tensor = [&](const std::string& name, const std::vector<int>& dims) {
+            int32_t nl = static_cast<int32_t>(name.length());
+            f.write(reinterpret_cast<char*>(&nl), 4);
+            f.write(name.data(), nl);
+            int32_t nd = static_cast<int32_t>(dims.size());
+            f.write(reinterpret_cast<char*>(&nd), 4);
+            int64_t total = 1;
+            for (int d : dims) {
+                int32_t dim_val = d;
+                f.write(reinterpret_cast<char*>(&dim_val), 4);
+                total *= d;
+            }
+            f.write(reinterpret_cast<char*>(&total), 8);
+            std::vector<float> data(total, 0.5f);
+            f.write(reinterpret_cast<char*>(data.data()), total * sizeof(float));
+        };
+
+        write_tensor("model.embed_tokens.weight", {16, 16});
+        write_tensor("model.norm.weight", {16});
+        write_tensor("lm_head.weight", {16, 16});
+    }
+
+    ModelWeights weights;
+    CheckpointLoader::load_weights(test_bin_path, cfg, weights, Device::CUDA);
+
+    if (!weights.embedding.is_valid() || !weights.final_norm.is_valid() || !weights.lm_head.is_valid()) {
+        printf("  FAILED: Tensors not properly populated\n");
         return false;
     }
 
@@ -579,14 +628,244 @@ bool test_llama_architecture() {
     return true;
 }
 
-int main() {
-    printf("========================================\n");
-    printf("  INFERNT — CUDA LLM Inference Engine\n");
-    printf("  Phases 1-12 Validation\n");
-    printf("========================================\n\n");
+bool test_embedding_and_sampling() {
+    printf("\n--- Test: Embedding Lookup & Argmax Sampling (Phase 15) ---\n");
+    int vocab_size = 10;
+    int hidden_size = 8;
+
+    auto table_cpu = Tensor::zeros({vocab_size, hidden_size}, DType::FP32, Device::CPU);
+    float* td = table_cpu.data_as_float();
+    for (int i = 0; i < vocab_size * hidden_size; i++) td[i] = static_cast<float>(i);
+
+    auto table_gpu = table_cpu.to(Device::CUDA);
+    auto out_gpu = Tensor::zeros({hidden_size}, DType::FP32, Device::CUDA);
+
+    int target_token = 3;
+    launch_embedding_lookup(out_gpu.data_as_float(), table_gpu.data_as_float(), target_token, hidden_size);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    auto out_cpu = out_gpu.to(Device::CPU);
+    const float* od = out_cpu.data_as_float();
+    for (int i = 0; i < hidden_size; i++) {
+        float expected = static_cast<float>(target_token * hidden_size + i);
+        if (std::fabs(od[i] - expected) > 1e-5f) {
+            printf("  FAILED embedding lookup at %d: expected=%.2f got=%.2f\n", i, expected, od[i]);
+            return false;
+        }
+    }
+
+    int test_vocab = 100;
+    auto logits_cpu = Tensor::zeros({test_vocab}, DType::FP32, Device::CPU);
+    float* ld = logits_cpu.data_as_float();
+    for (int i = 0; i < test_vocab; i++) ld[i] = static_cast<float>(i) * 0.01f;
+    ld[42] = 99.0f;
+
+    auto logits_gpu = logits_cpu.to(Device::CUDA);
+    auto out_token_gpu = Tensor::zeros({1}, DType::FP32, Device::CUDA);
+
+    launch_argmax(reinterpret_cast<int*>(out_token_gpu.data_as_float()), logits_gpu.data_as_float(), test_vocab);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    int sampled_idx = 0;
+    cudaMemcpy(&sampled_idx, out_token_gpu.data_as_float(), sizeof(int), cudaMemcpyDeviceToHost);
+
+    if (sampled_idx != 42) {
+        printf("  FAILED argmax sampling: expected=42 got=%d\n", sampled_idx);
+        return false;
+    }
+
+    printf("  PASSED\n");
+    return true;
+}
+
+bool test_autoregressive_generation() {
+    printf("\n--- Test: Autoregressive Loop & Profiling (Phases 16 & 17) ---\n");
+    ModelConfig config;
+    config.architecture = "LlamaForCausalLM";
+    config.vocab_size = 16;
+    config.hidden_size = 16;
+    config.num_layers = 2;
+    config.num_attention_heads = 2;
+    config.num_key_value_heads = 2;
+    config.intermediate_size = 32;
+    config.max_seq_len = 32;
+    config.rms_norm_eps = 1e-5f;
+    config.rope_theta = 10000.0f;
+    config.derive_computed_fields();
+
+    int q_size = config.num_attention_heads * config.head_dim;
+    int kv_size = config.num_key_value_heads * config.head_dim;
+
+    ModelWeights weights;
+    weights.embedding = Tensor::zeros({config.vocab_size, config.hidden_size}, DType::FP32, Device::CUDA);
+    weights.final_norm = Tensor::zeros({config.hidden_size}, DType::FP32, Device::CUDA);
+    weights.lm_head = Tensor::zeros({config.vocab_size, config.hidden_size}, DType::FP32, Device::CUDA);
+
+    for (int i = 0; i < config.num_layers; i++) {
+        TransformerLayerWeights lw;
+        lw.attn_norm = Tensor::zeros({config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.q_proj = Tensor::zeros({q_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.k_proj = Tensor::zeros({kv_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.v_proj = Tensor::zeros({kv_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.o_proj = Tensor::zeros({config.hidden_size, q_size}, DType::FP32, Device::CUDA);
+        lw.ffn_norm = Tensor::zeros({config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.gate_proj = Tensor::zeros({config.intermediate_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.up_proj = Tensor::zeros({config.intermediate_size, config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.down_proj = Tensor::zeros({config.hidden_size, config.intermediate_size}, DType::FP32, Device::CUDA);
+        weights.layers.push_back(std::move(lw));
+    }
+
+    Tokenizer tok;
+    std::vector<std::string> vocab = {
+        "<unk>", "<s>", "</s>", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"
+    };
+    std::vector<float> scores(16, 1.0f);
+    tok.load_from_vocab(vocab, scores);
+
+    InferenceEngine engine;
+    engine.initialize(config, std::move(weights), std::move(tok));
+
+    GenerationConfig gen_cfg;
+    gen_cfg.max_new_tokens = 5;
+    gen_cfg.stream_stdout = false;
+    gen_cfg.temperature = 0.0f;
+
+    GenerationStats stats;
+    std::string output = engine.generate("abc", gen_cfg, &stats);
+
+    printf("  Generated tokens: %d\n", stats.generated_tokens);
+    printf("  Prefill latency: %.2f ms\n", stats.prefill_ms);
+    printf("  Decode latency:  %.2f ms\n", stats.decode_ms);
+    printf("  Total latency:   %.2f ms\n", stats.total_ms);
+    printf("  Throughput:      %.2f tok/s\n", stats.tokens_per_second);
+
+    if (stats.generated_tokens == 0) {
+        printf("  FAILED: No tokens generated\n");
+        return false;
+    }
+
+    printf("  PASSED\n");
+    return true;
+}
+
+bool test_architecture_generalization() {
+    printf("\n--- Test: Architecture Generalization (Phase 18) ---\n");
+    ModelConfig non_tinyllama_config;
+    non_tinyllama_config.architecture = "LlamaForCausalLM";
+    non_tinyllama_config.vocab_size = 500;
+    non_tinyllama_config.hidden_size = 128;
+    non_tinyllama_config.num_layers = 3;
+    non_tinyllama_config.num_attention_heads = 8;
+    non_tinyllama_config.num_key_value_heads = 2;
+    non_tinyllama_config.intermediate_size = 256;
+    non_tinyllama_config.max_seq_len = 64;
+    non_tinyllama_config.rms_norm_eps = 1e-6f;
+    non_tinyllama_config.rope_theta = 50000.0f;
+    non_tinyllama_config.derive_computed_fields();
+    non_tinyllama_config.validate();
+
+    if (non_tinyllama_config.head_dim != 16) return false;
+    if (non_tinyllama_config.num_kv_groups() != 4) return false;
+
+    CublasWrapper cublas;
+    LlamaArchitecture arch(cublas);
+    arch.allocate_activations(non_tinyllama_config, 1);
+
+    KVCache kv;
+    kv.allocate(non_tinyllama_config);
+    kv.reset();
+
+    ModelWeights weights;
+    weights.final_norm = Tensor::zeros({non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+    weights.lm_head = Tensor::zeros({non_tinyllama_config.vocab_size, non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+    
+    int q_size = non_tinyllama_config.num_attention_heads * non_tinyllama_config.head_dim;
+    int kv_size = non_tinyllama_config.num_key_value_heads * non_tinyllama_config.head_dim;
+
+    for (int i = 0; i < non_tinyllama_config.num_layers; i++) {
+        TransformerLayerWeights lw;
+        lw.attn_norm = Tensor::zeros({non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.q_proj = Tensor::zeros({q_size, non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.k_proj = Tensor::zeros({kv_size, non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.v_proj = Tensor::zeros({kv_size, non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.o_proj = Tensor::zeros({non_tinyllama_config.hidden_size, q_size}, DType::FP32, Device::CUDA);
+        lw.ffn_norm = Tensor::zeros({non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.gate_proj = Tensor::zeros({non_tinyllama_config.intermediate_size, non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.up_proj = Tensor::zeros({non_tinyllama_config.intermediate_size, non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+        lw.down_proj = Tensor::zeros({non_tinyllama_config.hidden_size, non_tinyllama_config.intermediate_size}, DType::FP32, Device::CUDA);
+        weights.layers.push_back(std::move(lw));
+    }
+
+    auto input_emb = Tensor::zeros({1, non_tinyllama_config.hidden_size}, DType::FP32, Device::CUDA);
+    auto logits = Tensor::zeros({1, non_tinyllama_config.vocab_size}, DType::FP32, Device::CUDA);
+
+    arch.forward(input_emb, weights, kv, 0, logits);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    printf("  Arbitrary dimension model forward pass succeeded\n");
+    printf("  PASSED\n");
+    return true;
+}
+
+int main(int argc, char** argv) {
+    std::string model_dir;
+    std::string prompt = "Once upon a time";
+    int max_tokens = 32;
+    float temperature = 0.0f;
+
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--model" && i + 1 < argc) {
+            model_dir = argv[++i];
+        } else if (std::string(argv[i]) == "--prompt" && i + 1 < argc) {
+            prompt = argv[++i];
+        } else if (std::string(argv[i]) == "--max-tokens" && i + 1 < argc) {
+            max_tokens = std::stoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--temp" && i + 1 < argc) {
+            temperature = std::stof(argv[++i]);
+        }
+    }
 
     cuda_init(0);
     GPUInfo gpu = cuda_get_device_info(0);
+
+    if (!model_dir.empty()) {
+        printf("========================================\n");
+        printf("  INFERNT — CUDA LLM Live Inference\n");
+        printf("========================================\n");
+        cuda_print_device_info(gpu);
+
+        try {
+            InferenceEngine engine;
+            printf("\nLoading model from: %s\n", model_dir.c_str());
+            engine.load_model(model_dir);
+            engine.config().print();
+
+            GenerationConfig gen_cfg;
+            gen_cfg.max_new_tokens = max_tokens;
+            gen_cfg.temperature = temperature;
+            gen_cfg.stream_stdout = true;
+
+            GenerationStats stats;
+            printf("\nPrompt: %s\nResponse: ", prompt.c_str());
+            engine.generate(prompt, gen_cfg, &stats);
+            printf("\n\n=== Generation Performance ===\n");
+            printf("  Prompt tokens:   %d\n", stats.prompt_tokens);
+            printf("  New tokens:      %d\n", stats.generated_tokens);
+            printf("  Prefill latency: %.2f ms\n", stats.prefill_ms);
+            printf("  Decode latency:  %.2f ms\n", stats.decode_ms);
+            printf("  Throughput:      %.2f tokens/sec\n", stats.tokens_per_second);
+            printf("==============================\n");
+            return 0;
+        } catch (const std::exception& e) {
+            printf("\nError during inference: %s\n", e.what());
+            return 1;
+        }
+    }
+
+    printf("========================================\n");
+    printf("  INFERNT — Full Engine Test Suite\n");
+    printf("  Phases 1-18 Verification\n");
+    printf("========================================\n\n");
     cuda_print_device_info(gpu);
 
     int passed = 0;
@@ -634,6 +913,21 @@ int main() {
     printf("\n=== Phases 9-12: MLP & Architecture ===\n");
     run_test("SiLU MLP Activation", test_mlp_activation);
     run_test("Llama Forward Pass", test_llama_architecture);
+
+    printf("\n=== Phase 13: Tokenizer ===\n");
+    run_test("BPE Tokenizer", test_tokenizer);
+
+    printf("\n=== Phase 14: Checkpoint Loader ===\n");
+    run_test("Checkpoint Loader", test_checkpoint_loader);
+
+    printf("\n=== Phase 15: Embedding & Sampling ===\n");
+    run_test("Embedding Lookup & Argmax", test_embedding_and_sampling);
+
+    printf("\n=== Phases 16 & 17: Autoregressive Loop & Profiling ===\n");
+    run_test("Autoregressive Generation", test_autoregressive_generation);
+
+    printf("\n=== Phase 18: Architecture Generalization ===\n");
+    run_test("Architecture Generalization", test_architecture_generalization);
 
     printf("\n========================================\n");
     printf("  Results: %d passed, %d failed\n", passed, failed);

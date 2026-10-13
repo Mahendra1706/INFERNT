@@ -35,5 +35,5 @@ echo "Build complete."
 echo "Binary: $(pwd)/bin/infernt"
 echo ""
 
-echo "Running INFERNT Phase 1 tests..."
-./bin/infernt
+echo "Running INFERNT..."
+./bin/infernt "$@"

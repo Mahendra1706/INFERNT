@@ -43,20 +43,17 @@ private:
     ModelConfig config_;
     int max_batch_size_;
 
-    // Activation buffers
     Tensor hidden_states_;
     Tensor next_hidden_states_;
     Tensor norm_out_;
     
-    // Attention buffers
     Tensor q_;
     Tensor k_;
     Tensor v_;
     Tensor attn_scores_;
-    Tensor attn_probs_; // Optional if we apply softmax in-place
+    Tensor attn_probs_;
     Tensor attn_out_;
     
-    // MLP buffers
     Tensor gate_;
     Tensor up_;
     Tensor silu_out_;
