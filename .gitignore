@@ -4,5 +4,7 @@ build/
 *.a
 bin/
 .DS_Store
-master_prompt.md
-infernt_colab.ipynb
+__pycache__/
+*.pyc
+model_checkpoint/
+*.bin

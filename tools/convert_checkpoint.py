@@ -43,7 +43,21 @@ def convert_tokenizer(tokenizer, output_path):
     vocab_size = len(vocab)
     id_to_token = {v: k for k, v in vocab.items()}
 
+    # Try to extract real SentencePiece scores from the underlying model
+    sp_scores = {}
+    try:
+        if hasattr(tokenizer, 'sp_model'):
+            sp_model = tokenizer.sp_model
+            for i in range(sp_model.get_piece_size()):
+                piece = sp_model.id_to_piece(i)
+                score = sp_model.get_score(i)
+                sp_scores[piece] = score
+            print(f"  Extracted {len(sp_scores)} scores from SentencePiece model")
+    except Exception as e:
+        print(f"  Warning: Could not extract SentencePiece scores: {e}")
+
     tokens = []
+    scores_list = []
     max_token_len = 0
     for i in range(vocab_size):
         piece = id_to_token.get(i, f"<token_{i}>")
@@ -52,10 +66,16 @@ def convert_tokenizer(tokenizer, output_path):
         if len(piece_bytes) > max_token_len:
             max_token_len = len(piece_bytes)
 
+        # Use real SentencePiece score if available, otherwise use -i as fallback
+        if piece in sp_scores:
+            scores_list.append(sp_scores[piece])
+        else:
+            scores_list.append(-float(i))
+
     with open(output_path, "wb") as f:
         f.write(struct.pack("II", vocab_size, max_token_len))
         for i, piece_bytes in enumerate(tokens):
-            score = -float(i)
+            score = scores_list[i]
             length = len(piece_bytes)
             f.write(struct.pack("fi", score, length))
             f.write(piece_bytes)

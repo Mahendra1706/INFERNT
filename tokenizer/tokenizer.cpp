@@ -128,6 +128,14 @@ std::vector<int> Tokenizer::encode(const std::string& text, bool bos, bool eos) 
             auto it = token_to_id_.find(byte_buf);
             if (it != token_to_id_.end()) {
                 char_tokens.push_back(it->second);
+            } else {
+                // Fallback to <unk> token (id 0) instead of silently dropping
+                auto unk_it = token_to_id_.find("<unk>");
+                if (unk_it != token_to_id_.end()) {
+                    char_tokens.push_back(unk_it->second);
+                } else {
+                    char_tokens.push_back(0);
+                }
             }
             i++;
         }
