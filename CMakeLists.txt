@@ -7,6 +7,9 @@ set(CMAKE_CUDA_ARCHITECTURES 70 75 80 89 CACHE STRING "CUDA architectures to com
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Find CUDA toolkit (provides include paths + library targets for g++)
+find_package(CUDAToolkit REQUIRED)
+
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_executable(infernt
@@ -33,6 +36,7 @@ add_executable(infernt
 )
 
 target_link_libraries(infernt
-    cudart
-    cublas
+    CUDA::cudart
+    CUDA::cublas
 )
+
