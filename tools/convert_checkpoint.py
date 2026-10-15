@@ -53,6 +53,14 @@ def convert_tokenizer(tokenizer, output_path):
                 score = sp_model.get_score(i)
                 sp_scores[piece] = score
             print(f"  Extracted {len(sp_scores)} scores from SentencePiece model")
+        elif hasattr(tokenizer, 'vocab_file') and tokenizer.vocab_file and os.path.exists(tokenizer.vocab_file):
+            import sentencepiece as spm
+            sp_model = spm.SentencePieceProcessor(model_file=tokenizer.vocab_file)
+            for i in range(sp_model.get_piece_size()):
+                piece = sp_model.id_to_piece(i)
+                score = sp_model.get_score(i)
+                sp_scores[piece] = score
+            print(f"  Extracted {len(sp_scores)} scores from SentencePiece vocab file")
     except Exception as e:
         print(f"  Warning: Could not extract SentencePiece scores: {e}")
 
@@ -149,7 +157,10 @@ def main():
     convert_config(hf_config, config_path)
 
     print(f"Loading tokenizer from {args.model}...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(args.model)
     tokenizer_path = os.path.join(args.output_dir, "tokenizer.bin")
     convert_tokenizer(tokenizer, tokenizer_path)
 

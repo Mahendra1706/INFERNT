@@ -252,17 +252,19 @@ bool test_rope() {
 
     std::vector<float> q_expected(num_heads * head_dim);
     std::vector<float> k_expected(num_heads * head_dim);
+    int half = head_dim / 2;
     for (int h = 0; h < num_heads; h++) {
-        for (int d = 0; d < head_dim; d += 2) {
-            float freq = 1.0f / std::pow(theta, (float)d / (float)head_dim);
+        for (int d = 0; d < half; d++) {
+            float freq = 1.0f / std::pow(theta, (float)(2 * d) / (float)head_dim);
             float angle = position * freq;
             float cos_val = std::cos(angle);
             float sin_val = std::sin(angle);
-            int idx = h * head_dim + d;
-            q_expected[idx]   = 1.0f * cos_val - 1.0f * sin_val;
-            q_expected[idx+1] = 1.0f * sin_val + 1.0f * cos_val;
-            k_expected[idx]   = q_expected[idx];
-            k_expected[idx+1] = q_expected[idx+1];
+            int idx0 = h * head_dim + d;
+            int idx1 = h * head_dim + d + half;
+            q_expected[idx0] = 1.0f * cos_val - 1.0f * sin_val;
+            q_expected[idx1] = 1.0f * cos_val + 1.0f * sin_val;
+            k_expected[idx0] = q_expected[idx0];
+            k_expected[idx1] = q_expected[idx1];
         }
     }
 

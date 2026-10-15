@@ -149,7 +149,8 @@ std::string InferenceEngine::generate(const std::string& prompt,
             break;
         }
 
-        next_token = forward_token(next_token, current_pos);
+        forward_token(next_token, current_pos);
+        next_token = sample_next_token(gen_config.temperature);
     }
     auto end_decode = std::chrono::high_resolution_clock::now();
     auto end_all = std::chrono::high_resolution_clock::now();
