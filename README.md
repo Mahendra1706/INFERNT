@@ -348,11 +348,11 @@ Prompt: Once upon a time,
 Response:  there was a little girl who lived in a village near the forest.
 
 === Generation Performance ===
-  Prompt tokens:   5
+  Prompt tokens:   7
   New tokens:      64
-  Prefill latency: 8.24 ms
-  Decode latency:  812.35 ms
-  Throughput:      78.78 tokens/sec
+  Prefill latency: 158.70 ms
+  Decode latency:  1205.26 ms
+  Throughput:      53.10 tokens/sec
 ==============================
 ```
 
