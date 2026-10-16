@@ -477,7 +477,7 @@ bool test_mlp_activation() {
 }
 
 bool test_llama_architecture() {
-    printf("\n--- Test: LlamaArchitecture Forward (Phases 10-12) ---\n");
+    printf("\n--- Test: LlamaArchitecture Forward Pass ---\n");
     ModelConfig config;
     config.architecture = "LlamaForCausalLM";
     config.vocab_size = 100;
@@ -531,7 +531,7 @@ bool test_llama_architecture() {
 }
 
 bool test_tokenizer() {
-    printf("\n--- Test: Tokenizer BPE (Phase 13) ---\n");
+    printf("\n--- Test: SentencePiece BPE Tokenizer ---\n");
     Tokenizer tok;
     std::vector<std::string> vocab = {
         "<unk>", "<s>", "</s>", "\xe2\x96\x81", "H", "e", "l", "o", "w", "r", "d", "!",
@@ -561,7 +561,7 @@ bool test_tokenizer() {
 }
 
 bool test_checkpoint_loader() {
-    printf("\n--- Test: Checkpoint Loader (Phase 14) ---\n");
+    printf("\n--- Test: Binary Checkpoint Loader ---\n");
     std::string test_cfg_path = "/tmp/infernt_test_config.json";
     std::string test_bin_path = "/tmp/infernt_test_model.bin";
 
@@ -631,7 +631,7 @@ bool test_checkpoint_loader() {
 }
 
 bool test_embedding_and_sampling() {
-    printf("\n--- Test: Embedding Lookup & Argmax Sampling (Phase 15) ---\n");
+    printf("\n--- Test: Embedding Lookup & Parallel Argmax ---\n");
     int vocab_size = 10;
     int hidden_size = 8;
 
@@ -681,7 +681,7 @@ bool test_embedding_and_sampling() {
 }
 
 bool test_autoregressive_generation() {
-    printf("\n--- Test: Autoregressive Loop & Profiling (Phases 16 & 17) ---\n");
+    printf("\n--- Test: Autoregressive Loop & Latency Profiling ---\n");
     ModelConfig config;
     config.architecture = "LlamaForCausalLM";
     config.vocab_size = 16;
@@ -751,7 +751,7 @@ bool test_autoregressive_generation() {
 }
 
 bool test_architecture_generalization() {
-    printf("\n--- Test: Architecture Generalization (Phase 18) ---\n");
+    printf("\n--- Test: Architecture Generalization ---\n");
     ModelConfig non_tinyllama_config;
     non_tinyllama_config.architecture = "LlamaForCausalLM";
     non_tinyllama_config.vocab_size = 500;
@@ -865,8 +865,7 @@ int main(int argc, char** argv) {
     }
 
     printf("========================================\n");
-    printf("  INFERNT — Full Engine Test Suite\n");
-    printf("  Phases 1-18 Verification\n");
+    printf("  INFERNT — Engine Verification Suite\n");
     printf("========================================\n\n");
     cuda_print_device_info(gpu);
 
@@ -887,48 +886,48 @@ int main(int argc, char** argv) {
         }
     };
 
-    printf("\n=== Phase 1: Foundation ===\n");
+    printf("\n=== Module: Core Tensor Infrastructure ===\n");
     run_test("CPU Tensor", test_tensor_cpu);
     run_test("GPU Tensor", test_tensor_gpu);
     run_test("Move Semantics", test_tensor_move);
     run_test("ModelConfig", test_config);
 
-    printf("\n=== Phase 2: cuBLAS ===\n");
+    printf("\n=== Module: Linear Projections & Compute ===\n");
     run_test("cuBLAS GEMM", test_cublas_gemm);
 
-    printf("\n=== Phase 4: RMSNorm + Residual ===\n");
+    printf("\n=== Module: Normalization & Residual Connections ===\n");
     run_test("RMSNorm", test_rmsnorm);
     run_test("Residual Add", test_residual);
 
-    printf("\n=== Phase 5: RoPE ===\n");
+    printf("\n=== Module: Positional Embeddings ===\n");
     run_test("RoPE", test_rope);
 
-    printf("\n=== Phase 6: Softmax ===\n");
+    printf("\n=== Module: Attention & Softmax ===\n");
     run_test("Softmax", test_softmax);
 
-    printf("\n=== Phase 7: KV Cache ===\n");
+    printf("\n=== Module: KV Cache Subsystem ===\n");
     run_test("KV Cache Append", test_kv_cache);
 
-    printf("\n=== Phase 8: Attention + GQA ===\n");
+    printf("\n=== Module: Grouped-Query Attention (GQA) ===\n");
     run_test("Attention GQA", test_attention_gqa);
 
-    printf("\n=== Phases 9-12: MLP & Architecture ===\n");
+    printf("\n=== Module: Feed-Forward Network & Transformer Architecture ===\n");
     run_test("SiLU MLP Activation", test_mlp_activation);
     run_test("Llama Forward Pass", test_llama_architecture);
 
-    printf("\n=== Phase 13: Tokenizer ===\n");
+    printf("\n=== Module: Tokenizer Subsystem ===\n");
     run_test("BPE Tokenizer", test_tokenizer);
 
-    printf("\n=== Phase 14: Checkpoint Loader ===\n");
+    printf("\n=== Module: Model Weight Ingestion ===\n");
     run_test("Checkpoint Loader", test_checkpoint_loader);
 
-    printf("\n=== Phase 15: Embedding & Sampling ===\n");
+    printf("\n=== Module: Sampling Subsystem ===\n");
     run_test("Embedding Lookup & Argmax", test_embedding_and_sampling);
 
-    printf("\n=== Phases 16 & 17: Autoregressive Loop & Profiling ===\n");
+    printf("\n=== Module: Autoregressive Pipeline & Profiling ===\n");
     run_test("Autoregressive Generation", test_autoregressive_generation);
 
-    printf("\n=== Phase 18: Architecture Generalization ===\n");
+    printf("\n=== Module: Cross-Architecture Generalization ===\n");
     run_test("Architecture Generalization", test_architecture_generalization);
 
     printf("\n========================================\n");
