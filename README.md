@@ -388,7 +388,7 @@ The table below compares **INFERNT** against the battle-tested **llama.cpp** eng
 
 ---
 
-## Engineering Roadmap
+## possible next steps to touch baseline
 
 - [ ] **Batched Prefill GEMM**: Matrix-parallel prompt processing ($M = N_{\text{tokens}}$) to close TTFT and prefill throughput gap.
 - [ ] **Precision**: FP16 / BF16 mixed-precision kernels utilizing Tensor Cores (`wmma` / `mma.sync`).
