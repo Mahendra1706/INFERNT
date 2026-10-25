@@ -356,10 +356,41 @@ Response:  there was a little girl who lived in a village near the forest.
 ==============================
 ```
 
+### Comparative Benchmark: INFERNT vs. llama.cpp
+
+The table below compares **INFERNT** against the battle-tested **llama.cpp** engine, evaluated on the **identical hardware and model target**:
+* **Hardware**: NVIDIA Tesla T4 GPU (16 GB GDDR6, Turing Architecture, sm_75)
+* **Model**: `TinyLlama/TinyLlama-1.1B-Chat-v1.0` (22 layers, hidden dimension 2048, 32 Q heads, 4 KV groups)
+
+| Metric | INFERNT (Custom CUDA/C++ from Scratch) | llama.cpp (Optimized C++ Reference Engine) | Architecture Delta & Notes |
+|---|---|---|---|
+| **Prefill Speed** | ~44.1 tokens/sec | **3,088.72 ± 78.11 tokens/sec** | Batched Prompt GEMM ($M = N_{\text{prompt}}$) vs. unbatched sequential prefill |
+| **Decode Speed** | 53.10 tokens/sec | **138.17 ± 0.73 tokens/sec** | Pure FP32 custom CUDA kernels vs. Tensor Core accelerated FP16/GEMV |
+| **End-to-End Speed** | ~46.9 tokens/sec | **135.13 ± 0.75 tokens/sec** | Overall generation rate including prompt ingestion and decode |
+| **Time to First Token (TTFT)** | 158.70 ms (7 tokens) | **24.74 ± 0.40 ms** | Reflects prompt evaluation phase latency |
+| **Per-Token Latency (Mean)** | 18.83 ms | **7.24 ms** | Single-token forward pass time in autoregressive decode loop |
+
+#### Performance & Architectural Analysis
+
+1. **Autoregressive Decode Throughput (53.10 vs. 138.17 tok/s)**:
+   * **INFERNT** executes an unquantized FP32 pipeline with custom coalesced CUDA kernels (RMSNorm, RoPE, Causal Softmax, GQA, SwiGLU) and cuBLAS `cublasSgemm` projections. With **zero dynamic runtime memory allocations** (`cudaMalloc`) in the generation loop, INFERNT achieves a per-token latency of **18.83 ms** (53.10 tok/s) from scratch.
+   * **llama.cpp** achieves 138.17 tok/s (7.24 ms/token) through FP16 precision, hardware-specialized matrix-vector GEMV kernels, and Tensor Core utilization.
+
+2. **Prefill Throughput & Time to First Token (TTFT)**:
+   * **llama.cpp** batches all prompt tokens into a single parallel 2D GEMM invocation ($M = \text{prompt\_length}$), saturating GPU compute units to achieve **3,088.72 tokens/sec** and a sub-25 ms TTFT.
+   * **INFERNT** currently processes prompt tokens sequentially token-by-token through the forward loop. Transitioning to a batched prefill GEMM will eliminate the 158.70 ms prefill bottleneck and bring TTFT on par with llama.cpp.
+
+3. **Roadmap to Parity**:
+   The benchmark directly validates the core engine design while outlining the path toward matching and exceeding production baselines:
+   * **Batched Prefill GEMM**: Process entire prompt matrices in parallel rather than token-by-token.
+   * **FP16 / BF16 Tensor Cores**: Leverage NVIDIA Tensor Cores (`wmma` / `mma.sync`) to halve memory bandwidth pressure and boost arithmetic throughput.
+   * **Fused Attention**: Implement fused FlashAttention-style decode kernels to minimize global memory roundtrips for KV reads.
+
 ---
 
 ## Engineering Roadmap
 
+- [ ] **Batched Prefill GEMM**: Matrix-parallel prompt processing ($M = N_{\text{tokens}}$) to close TTFT and prefill throughput gap.
 - [ ] **Precision**: FP16 / BF16 mixed-precision kernels utilizing Tensor Cores (`wmma` / `mma.sync`).
 - [ ] **Attention Optimization**: Fused FlashAttention-2 decode kernel to minimize global memory roundtrips.
 - [ ] **PagedAttention & KV Paging**: Virtual memory paging for KV cache to support dynamic sequence lengths without maximum length pre-allocation.
